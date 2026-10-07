@@ -17,8 +17,10 @@ enum Skip[+A]:
  * no node for a delay — `pure(()).flatMap(_ => …)` is the delay, read by the loop in constant stack.
  *
  *  - tailcallPure: no effect — the loop over binds alone
- *  - tailcallHandled: a `Tick` per call, answered by the nearest handler: an operation, its clause, the rest
- *    resumed lazily, every call
+ *  - tailcallHandled: a `Tick` per call, answered IN PLACE by the nearest handler (`Answering`): the fold goes
+ *    on with the rest, no resumption built
+ *  - tailcallHandledGeneral: the same handler with its clause `k(a)` written out: an operation, its clause, the
+ *    rest resumed lazily, every call
  *  - tailcallForwarded: the same `Tick` per call, through an inner handler of another effect to the outer:
  *    the operation goes out by its path, re-folded by the inner on the way back
  */
@@ -45,19 +47,27 @@ class ContBenchmark:
   def isOddT(n: Int)(using c: Effects, t: Has[Tick, c.R]): Cont[c.R, c.S, c.S, Boolean] =
     if n == 0 then pure(false) else perform(Tick.Value(n)).flatMap(_ => isEvenT(n - 1))
 
-  /** `Tick` answered with its value: the general clause, `k` once */
-  def ticking[Q, A](using c: Effects): Handler[Tick, c.R, c.S, A, A] = new Handler[Tick, c.R, c.S, A, A]:
+  /** `Tick` answered with its value: answered in place, its clause `k(a)` */
+  def ticking[Q, A](using c: Effects): Handler[Tick, c.R, c.S, A, A] = new Answering[Tick, c.R, c.S, A, A]:
+    def ret(a: A): A = a
+    def value[X](op: Tick[X]): X = op match
+      case Tick.Value(a) => a
+  /** the same handler with its clause written out, `k(a)`: the general road, a resumption built per operation */
+  def tickingK[Q, A](using c: Effects): Handler[Tick, c.R, c.S, A, A] = new Handler[Tick, c.R, c.S, A, A]:
     def ret(a: A): A = a
     def apply[X](op: Tick[X], k: X => Cont[c.R, c.S, c.S, A]): Cont[c.R, c.S, c.S, A] = op match
       case Tick.Value(a) => k(a)
   /** the inner handler, of `Skip`: crossed by every `Tick` */
-  def skipping[A](using c: Effects): Handler[Skip, c.R, c.S, A, A] = new Handler[Skip, c.R, c.S, A, A]:
+  def skipping[A](using c: Effects): Handler[Skip, c.R, c.S, A, A] = new Answering[Skip, c.R, c.S, A, A]:
     def ret(a: A): A = a
-    def apply[X](op: Skip[X], k: X => Cont[c.R, c.S, c.S, A]): Cont[c.R, c.S, c.S, A] = op match
-      case Skip.Value(a) => k(a)
+    def value[X](op: Skip[X]): X = op match
+      case Skip.Value(a) => a
 
   @Benchmark
   def tailcallHandled(): Boolean = run(Effects.handle(ticking)(isEvenT(n)))
+
+  @Benchmark
+  def tailcallHandledGeneral(): Boolean = run(Effects.handle(tickingK)(isEvenT(n)))
 
   @Benchmark
   def tailcallForwarded(): Boolean = run(Effects.handle(ticking)(Effects.handle(skipping)(isEvenT(n))))

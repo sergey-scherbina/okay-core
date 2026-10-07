@@ -17,11 +17,11 @@ final class CollectAt[W, A]:
   type Ans = (List[W], A)
   def apply(using c: Effects)(body: Effects.At[EmitOf[W] +: c.R, Ans] ?=> Cont[EmitOf[W] +: c.R, Ans, Ans, A]): Cont[c.R, c.S, c.S, Ans] =
     Cont.pure[c.R, c.S, Unit](()).flatMap: _ =>
-      Effects.handle(new Handler[EmitOf[W], c.R, c.S, A, Ans]:
+      Effects.handle(new Answering[EmitOf[W], c.R, c.S, A, Ans]:
         private val out = List.newBuilder[W]
         def ret(a: A): Ans = (out.result(), a)
-        def apply[X](op: Emit[W, X], k: X => Cont[c.R, c.S, c.S, Ans]): Cont[c.R, c.S, c.S, Ans] = op match
-          case Emit.Yield(w) => out += w; k(()))(body)
+        def value[X](op: Emit[W, X]): X = op match
+          case Emit.Yield(w) => out += w; ())(body)
 
 /** a lazy generator over the row `R`: the next element and the rest, a program over `R` at the generator's own
  * answer; or done */

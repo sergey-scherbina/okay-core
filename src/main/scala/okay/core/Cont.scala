@@ -20,10 +20,12 @@ type +[R <: Row, E[_]] = E +: R
 sealed trait In[E[_], R <: Row]:
   /** the head for an operation at this path: the row has the effect, the path says so */
   def op[I, O, X, A](op: E[X], k: X => Cont[R, I, O, A]): Head[R, I, O, A]
-  /** the operation out at this path, and the rest of the body (over its own row, `R2`) resumed with the value,
-   * lazily, under `rest` — re-delimited, or folded by the handler whose delimiter the operation crossed */
+  /** the operation out at this path, and the rest of the body (over its own row, `R2`) resumed with the value
+   * under `rest` — re-delimited, or folded by the handler whose delimiter the operation crossed. No lazy wrapper:
+   * the continuation is applied only by whoever answers the operation outside, while folding (answered in place)
+   * or inside a resumption of its own (a clause's `k`, lazy already) */
   def resume[R2 <: Row, Q, I, O, X, A, Z](op: E[X], k: X => Cont[R2, I, O, A])(rest: Cont[R2, I, O, A] => Cont[R, Q, Q, Z]): Cont[R, Q, Q, Z] =
-    Cont.Inject(op, this).flatMap(x => rest(Cont.Return(x).flatMap(k)))
+    Cont.Inject(op, this).flatMap(x => rest(k(x)))
 object In extends InLow:
   final case class Here[E[_], T <: Row]() extends In[E, E +: T]:
     def op[I, O, X, A](op: E[X], k: X => Cont[E +: T, I, O, A]): Head[E +: T, I, O, A] = Head.Op(op, this, k)

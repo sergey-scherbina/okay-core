@@ -27,6 +27,14 @@ class TestEffects extends munit.FunSuite:
         yield s"$a,$b"
     assertEquals(r, (20, "1,20"))
 
+  test("100 000 operations answered in place, and forwarded through a handler, in constant stack"):
+    def loop(i: Int)(using c: Effects, s: Has[StateOf[Int], c.R]): Cont[c.R, c.S, c.S, Int] =
+      if i == 0 then get[Int] else modify[Int](_ + 1).flatMap(_ => loop(i - 1))
+    assertEquals(run(state[Int](0)(loop(100000))), (100000, 100000))
+    def asks(i: Int, acc: Int)(using c: Effects, r: Has[ReaderOf[Int], c.R]): Cont[c.R, c.S, c.S, Int] =
+      if i == 0 then Cont.pure(acc) else ask[Int].flatMap(x => asks(i - 1, acc + x))
+    assertEquals(run(reader[(List[String], Int)](1)(collect[String, Int](asks(100000, 0)))), (Nil, 100000))
+
   test("state: the cell is per run — the same program run twice starts from s0 twice"):
     val p: Cont[Pure, (Int, Int), (Int, Int), (Int, Int)] = state[Int](0)(using At[Pure, (Int, Int)]())(modify[Int](_ + 1))
     assertEquals(p.value, (1, 1))
@@ -110,6 +118,18 @@ class TestEffects extends munit.FunSuite:
     assertEquals(run(collect[Long, Unit](fibs(10, 0, 1)))._1, first)
     assertEquals(take(10, generate[Long](using At[Pure, G]())(forever(0, 1))), first)
     assertEquals(run(collect[Long, Unit](fibs(10000, 0, 1)))._1.length, 10000)
+
+  test("generate stays lazy over a forwarded effect: an infinite body asking at every step, three pulled"):
+    type F = ReaderOf[Int] +: Pure
+    type G = Gen[Int, F]
+    var produced = 0
+    def from(n: Int)(using c: Effects, e: Has[EmitOf[Int], c.R], r: Has[ReaderOf[Int], c.R]): Cont[c.R, c.S, c.S, Unit] =
+      ask[Int].flatMap(x => yield_(n * x)).flatMap(_ => { produced += 1; from(n + 1) })
+    def take(i: Int, g: Cont[F, G, G, G]): List[Int] = if i == 0 then Nil else run(reader[G](10)(g)) match
+      case Gen.Done() => Nil
+      case Gen.Next(w, rest) => w :: take(i - 1, rest)
+    assertEquals(take(3, generate[Int](using At[F, G]())(from(1))), List(10, 20, 30))
+    assertEquals(produced, 2)
 
   test("an effect its context does not have cannot be performed"):
     assert(compileErrors("""run(reader[Unit](1)(tell("x")))""").nonEmpty)

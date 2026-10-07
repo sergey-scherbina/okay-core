@@ -10,7 +10,7 @@ def ask[E](using c: Effects, has: Has[ReaderOf[E], c.R]): Cont[c.R, c.S, c.S, E]
 def reader[A]: ReaderAt[A] = ReaderAt[A]()
 final class ReaderAt[A]:
   def apply[E](e: E)(using c: Effects)(body: Effects.At[ReaderOf[E] +: c.R, A] ?=> Cont[ReaderOf[E] +: c.R, A, A, A]): Cont[c.R, c.S, c.S, A] =
-    Effects.handle(new Handler[ReaderOf[E], c.R, c.S, A, A]:
+    Effects.handle(new Answering[ReaderOf[E], c.R, c.S, A, A]:
       def ret(a: A): A = a
-      def apply[X](op: Reader[E, X], k: X => Cont[c.R, c.S, c.S, A]): Cont[c.R, c.S, c.S, A] = op match
-        case Reader.Ask() => k(e))(body)
+      def value[X](op: Reader[E, X]): X = op match
+        case Reader.Ask() => e)(body)
