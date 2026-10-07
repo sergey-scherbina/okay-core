@@ -11,7 +11,9 @@ def choose[A]: ChooseAt[A] = ChooseAt[A]()
 final class ChooseAt[A]:
   def apply(using c: Effects)(body: Effects.At[Choose +: c.R, Seq[A]] ?=> Cont[Choose +: c.R, Seq[A], Seq[A], A]): Cont[c.R, c.S, c.S, Seq[A]] =
     Effects.handle(new Handler[Choose, c.R, c.S, A, Seq[A]]:
-      def ret(a: A): Seq[A] = Seq(a)
+      def ret(a: A): Seq[A] = Vector(a)
+      // the paths' values joined in a Vector: appending a path's to the ones before copies nothing of them — a
+      // List or a Seq's `++` copied all the values so far for each path, quadratic in their number
       def apply[X](op: Choose[X], k: X => Cont[c.R, c.S, c.S, Seq[A]]): Cont[c.R, c.S, c.S, Seq[A]] = op match
         case Choose.Among(as) =>
-          as.foldLeft(Cont.pure[c.R, c.S, Seq[A]](Seq.empty))((acc, x) => acc.flatMap(s => k(x).map(s ++ _))))(body)
+          as.foldLeft(Cont.pure[c.R, c.S, Seq[A]](Vector.empty))((acc, x) => acc.flatMap(v => k(x).map(v ++ _))))(body)

@@ -72,6 +72,17 @@ class TestEffects extends munit.FunSuite:
         yield (x, y)
     assertEquals(r, Seq((1, 10), (1, 20), (2, 10), (2, 20), (3, 10), (3, 20)))
 
+  test("choose among 10 000: every path, in order"):
+    assertEquals(run(choose[Int](among(0 until 10000).map(_ * 2))), (0 until 10000).map(_ * 2))
+
+  test("8 queens by choose: 92 solutions"):
+    def safe(col: Int, placed: List[Int]) = placed.zipWithIndex.forall((c, d) => c != col && math.abs(c - col) != d + 1)
+    def place(row: Int, placed: List[Int])(using c: Effects, ch: Has[Choose, c.R]): Cont[c.R, c.S, c.S, List[Int]] =
+      if row == 8 then Cont.pure(placed) else among((0 until 8).filter(safe(_, placed))).flatMap(col => place(row + 1, col :: placed))
+    val all = run(choose[List[Int]](place(0, Nil)))
+    assertEquals(all.length, 92)
+    assertEquals(all.head, List(3, 1, 6, 2, 5, 7, 4, 0))
+
   test("choose with an empty choice prunes the path"):
     assertEquals(run(choose[Int](among(Seq(1, 2)).flatMap(x => among(if x == 1 then Seq.empty else Seq(x))))), Seq(2))
 

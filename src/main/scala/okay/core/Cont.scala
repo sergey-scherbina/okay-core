@@ -38,9 +38,9 @@ sealed trait InLow:
  * modified. An operation is a leaf, `Inject`, with the path to its effect in the row, and means nothing by
  * itself — a handler is not in the tree; it is a fold over the tree's head (`handle`, in Effects.scala). `Bind`
  * composes the answers end to end; `Return`, `Inject`, `Map` and `Delay` keep them; `Shift` and `Reset` move
- * them. Five nodes are the monad; `Suspend`, `Map` and `Delay` are three of its programs as one node each, for
- * speed — an operation with its rest, a map, a tail call, each without a bind. `step` reads the eight, to the
- * head, with a stack of frames.
+ * them. Five nodes are the monad; `Suspend`, `Map`, `Delay` and `Push` are four of its programs as one node each,
+ * for speed — an operation with its rest, a map, a tail call, a resumed stack, each without a bind. `step` reads
+ * the nine, to the head, with a stack of frames.
  */
 enum Cont[R <: Row, I, O, A]:
   case Return[R <: Row, S, A](a: A) extends Cont[R, S, S, A]
@@ -62,6 +62,9 @@ enum Cont[R <: Row, I, O, A]:
   /** the delimiter: the body's value to its initial answer `S` by `ret`, its final answer `O` the delimiter's
    * value outside, at the answer `Q` there. An operation inside goes out as it is, the rest re-delimited */
   case Reset[R <: Row, Q, S, O, A](body: Cont[R, S, O, A], ret: A => S) extends Cont[R, Q, Q, O]
+  /** `m` with the rest as a stack already: what applying a captured `k` makes — `Bind(m, k)`, where the loop can
+   * take `k` as its stack as it is, not as a function to push. Only `Frames` make it */
+  case Push[R <: Row, I, T, O, A, B](m: Cont[R, T, O, A], k: Frames[R, A, I, T, B]) extends Cont[R, I, O, B]
 
   def flatMap[I2, B](f: A => Cont[R, I2, I, B]): Cont[R, I2, O, B] = this match
     case Inject(op, in) => Suspend(op, in, f)
@@ -72,22 +75,23 @@ enum Cont[R <: Row, I, O, A]:
  * `Bind` the loop enters pushes its function, no tree rebuilt. As a function it is the rest itself, `k`: a head's
  * continuation is the stack as it stands. Applying it runs one function, the rest bound after it — one call,
  * whatever the depth */
-sealed trait Frames[R <: Row, A, I, T, B] extends (A => Cont[R, I, T, B])
-object Frames:
+enum Frames[R <: Row, A, I, T, B] extends (A => Cont[R, I, T, B]):
   /** nothing bound: the value is the program's */
-  final case class End[R <: Row, S, A]() extends Frames[R, A, S, S, A]:
-    def apply(a: A): Cont[R, S, S, A] = Cont.Return(a)
+  case End[R <: Row, S, A]() extends Frames[R, A, S, S, A]
   /** `f` bound to the value, the rest of the stack to its result */
-  final case class Then[R <: Row, A, X, I, T1, T, B](f: A => Cont[R, T1, T, X], next: Frames[R, X, I, T1, B]) extends Frames[R, A, I, T, B]:
-    def apply(a: A): Cont[R, I, T, B] = next match
-      case End() => f(a)
-      case _ => Cont.Bind(f(a), next)
+  case Then[R <: Row, A, X, I, T1, T, B](f: A => Cont[R, T1, T, X], next: Frames[R, X, I, T1, B]) extends Frames[R, A, I, T, B]
   /** `f` mapped over the value, the rest of the stack to its result. Applied, it builds the next step and stops —
    * a chain of maps is not run through here, in the caller's stack */
-  final case class Mapped[R <: Row, A, X, I, T, B](f: A => X, next: Frames[R, X, I, T, B]) extends Frames[R, A, I, T, B]:
-    def apply(a: A): Cont[R, I, T, B] = next match
+  case Mapped[R <: Row, A, X, I, T, B](f: A => X, next: Frames[R, X, I, T, B]) extends Frames[R, A, I, T, B]
+
+  def apply(a: A): Cont[R, I, T, B] = this match
+    case End() => Cont.Return(a)
+    case Then(f, next) => next match
+      case End() => f(a)
+      case _ => Cont.Push(f(a), next)
+    case Mapped(f, next) => next match
       case End() => Cont.Return(f(a))
-      case _ => Cont.Bind(Cont.Return(f(a)), next)
+      case _ => Cont.Push(Cont.Return(f(a)), next)
 
 /** a program's head, what the loop over its binds comes to: its value, an operation with the rest, or a capture
  * with the rest. An operation's row has its effect's path in it, so a program over `Pure` has no operation. The
@@ -121,6 +125,7 @@ object Cont:
     case Shift(f) => Head.Cut(f, a => Return(a))
     case Reset(body, ret) => loop0(delimited(body, ret))
     case Delay(t) => loop0(t())
+    case Push(m, ks) => loop(m, ks)
     case Map(m, f) => m match
       case Return(a) => Head.Done(f(a))
       case _ => loop(m, Frames.Mapped(f, Frames.End()))
@@ -146,6 +151,9 @@ object Cont:
     case Reset(body, ret) => loop(delimited(body, ret), k)
     case Delay(t) => loop(t(), k)
     case Map(m, f) => loop(m, Frames.Mapped(f, k))
+    case Push(m, ks) => k match
+      case Frames.End() => loop(m, ks)
+      case _ => loop(m, Frames.Then(ks, k))
     case Bind(m, g) => m match
       case Return(a) => loop(g(a), k)
       case _ => loop(m, Frames.Then(g, k))

@@ -1,3 +1,6 @@
 time	commit	changed	args	wall	file
 2026-10-07T18-08-30	7f5d060	true	-prof gc	4:21	2026-10-07T18-08-30_7f5d060+.csv
 2026-10-07T18-13-40	7f5d060	true	-prof gc	4:22	2026-10-07T18-13-40_7f5d060+.csv
+2026-10-07T18-49-42	e1e1426	true	-prof gc Effects Queens Capture	3:00	2026-10-07T18-49-42_e1e1426+.csv
+2026-10-07T19-15-11	e1e1426	true	-prof gc	7:23	2026-10-07T19-15-11_e1e1426+.csv
+2026-10-07T22-07-56	e1e1426	true	-prof gc	7:21	2026-10-07T22-07-56_e1e1426+.csv

@@ -121,6 +121,24 @@ class TestCont extends munit.FunSuite:
     // k(x) = (x + 1) * 2 + 100: k(1) = 104, k(10) = 122
     assertEquals(p.value, 226)
 
+  test("k under 100 000 maps and binds, applied 3 times, each inside binds of its own: the stack k holds is not worn"):
+    def calls(k: Int => Cont[Pure, Long, Long, Long], i: Int, acc: Long): Cont[Pure, Long, Long, Long] =
+      if i == 0 then pure(acc) else k(i).flatMap(r => pure(r * 10)).flatMap(r => calls(k, i - 1, acc + r))
+    var p: Cont[Pure, Long, Long, Int] = shift[Pure, Long, Long, Int](k => calls(k, 3, 0))
+    for j <- 1 to 100000 do p = if j % 2 == 0 then p.map(_ + 1) else p.flatMap(x => pure(x + 1))
+    // k(i) = i + 100 000: the shots 3, 2, 1, each times 10
+    assertEquals(p.map(_.toLong).reset[Long].value, (100003L + 100002L + 100001L) * 10)
+
+  test("a handler resuming twice under 10 000 binds: each path runs the whole rest"):
+    type Q = (List[String], List[Int])
+    val h = new Handler[Ask, Say +: Pure, Q, Int, List[Int]]:
+      def ret(a: Int): List[Int] = List(a)
+      def apply[X](op: Ask[X], k: X => Cont[Say +: Pure, Q, Q, List[Int]]): Cont[Say +: Pure, Q, Q, List[Int]] = op match
+        case Ask.Number => k(1).flatMap(a => k(2).map(b => a ++ b))
+    var p: Cont[Eff, List[Int], List[Int], Int] = inject[Eff, List[Int], Ask, Int](Ask.Number)
+    for _ <- 1 to 10000 do p = p.flatMap(x => pure(x + 1)).map(_ + 1)
+    assertEquals(p.handle(h).handle(saying).value, (Nil, List(20001, 20002)))
+
   test("a map after an operation of a handler resuming twice: the map runs on each path"):
     val twice: Handler[Ask, Pure, List[Int], Int, List[Int]] = new Handler[Ask, Pure, List[Int], Int, List[Int]]:
       def ret(a: Int) = List(a)
