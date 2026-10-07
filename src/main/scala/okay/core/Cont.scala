@@ -20,12 +20,9 @@ type +[R <: Row, E[_]] = E +: R
 sealed trait In[E[_], R <: Row]:
   /** the head for an operation at this path: the row has the effect, the path says so */
   def op[I, O, X, A](op: E[X], k: X => Cont[R, I, O, A]): Head[R, I, O, A]
-  /** the operation out at this path, and the rest of the body (over its own row, `R2`) resumed with the value
-   * under `rest` — re-delimited, or folded by the handler whose delimiter the operation crossed. No lazy wrapper:
-   * the continuation is applied only by whoever answers the operation outside, while folding (answered in place)
-   * or inside a resumption of its own (a clause's `k`, lazy already) */
-  def resume[R2 <: Row, Q, I, O, X, A, Z](op: E[X], k: X => Cont[R2, I, O, A])(rest: Cont[R2, I, O, A] => Cont[R, Q, Q, Z]): Cont[R, Q, Q, Z] =
-    Cont.Inject(op, this).flatMap(x => rest(k(x)))
+  /** the operation out at this path, bound to `k`: an operation crossing a delimiter goes on outside so, `k` the
+   * rest put back under the delimiter it crossed */
+  def bind[Q, X, Z](op: E[X], k: X => Cont[R, Q, Q, Z]): Cont[R, Q, Q, Z] = Cont.Suspend(op, this, k)
 object In extends InLow:
   final case class Here[E[_], T <: Row]() extends In[E, E +: T]:
     def op[I, O, X, A](op: E[X], k: X => Cont[E +: T, I, O, A]): Head[E +: T, I, O, A] = Head.Op(op, this, k)
@@ -40,25 +37,57 @@ sealed trait InLow:
  * which, with a continuation answering `I`, answers `O` — Danvy–Filinski's `(A => I) => O`, the answer type
  * modified. An operation is a leaf, `Inject`, with the path to its effect in the row, and means nothing by
  * itself — a handler is not in the tree; it is a fold over the tree's head (`handle`, in Effects.scala). `Bind`
- * composes the answers end to end; `Return` and `Inject` keep them; `Shift` and `Reset` move them. `step` reads
- * the five nodes, to the head.
+ * composes the answers end to end; `Return`, `Inject`, `Map` and `Delay` keep them; `Shift` and `Reset` move
+ * them. Five nodes are the monad; `Suspend`, `Map` and `Delay` are three of its programs as one node each, for
+ * speed — an operation with its rest, a map, a tail call, each without a bind. `step` reads the eight, to the
+ * head, with a stack of frames.
  */
 enum Cont[R <: Row, I, O, A]:
   case Return[R <: Row, S, A](a: A) extends Cont[R, S, S, A]
   /** an operation of `E`, at its path in the row: a leaf, to whoever folds the tree */
   case Inject[E[_], R <: Row, S, X](op: E[X], in: In[E, R]) extends Cont[R, S, S, X]
+  /** an operation of `E` with the rest bound to its value: `Bind(Inject(op, in), k)` as one node — what
+   * `flatMap` on an operation makes, and what an operation crossing a delimiter goes on outside as */
+  case Suspend[E[_], R <: Row, I, O, X, A](op: E[X], in: In[E, R], k: X => Cont[R, I, O, A]) extends Cont[R, I, O, A]
   /** the answers composed end to end: `m` from `T` to `O`, `f`'s from `I` to `T` */
   case Bind[R <: Row, I, T, O, A, B](m: Cont[R, T, O, A], f: A => Cont[R, I, T, B]) extends Cont[R, I, O, B]
   /** `shift(k => body)`: `k` is the context up to the nearest delimiter, under a delimiter of its own, delivering
    * the answer at the hole, `I`; the body runs under the delimiter in place of the context, at its final answer
    * `O`, and its value is that answer */
   case Shift[R <: Row, I, O, A](f: (A => Cont[R, O, O, I]) => Cont[R, O, O, O]) extends Cont[R, I, O, A]
+  /** `m.map(f)`: one node, where `m.flatMap(a => pure(f(a)))` is a bind, a closure and a return */
+  case Map[R <: Row, I, O, A, B](m: Cont[R, I, O, A], f: A => B) extends Cont[R, I, O, B]
+  /** a program built when the loop gets to it: a tail call one node, where `pure(()).flatMap(_ => c)` is two */
+  case Delay[R <: Row, I, O, A](c: () => Cont[R, I, O, A]) extends Cont[R, I, O, A]
   /** the delimiter: the body's value to its initial answer `S` by `ret`, its final answer `O` the delimiter's
    * value outside, at the answer `Q` there. An operation inside goes out as it is, the rest re-delimited */
   case Reset[R <: Row, Q, S, O, A](body: Cont[R, S, O, A], ret: A => S) extends Cont[R, Q, Q, O]
 
-  def flatMap[I2, B](f: A => Cont[R, I2, I, B]): Cont[R, I2, O, B] = Bind(this, f)
-  def map[B](f: A => B): Cont[R, I, O, B] = Bind(this, a => Return(f(a)))
+  def flatMap[I2, B](f: A => Cont[R, I2, I, B]): Cont[R, I2, O, B] = this match
+    case Inject(op, in) => Suspend(op, in, f)
+    case _ => Bind(this, f)
+  def map[B](f: A => B): Cont[R, I, O, B] = Map(this, f)
+
+/** WHAT IS BOUND TO A VALUE, the loop's stack: the functions a value goes through, innermost first — each
+ * `Bind` the loop enters pushes its function, no tree rebuilt. As a function it is the rest itself, `k`: a head's
+ * continuation is the stack as it stands. Applying it runs one function, the rest bound after it — one call,
+ * whatever the depth */
+sealed trait Frames[R <: Row, A, I, T, B] extends (A => Cont[R, I, T, B])
+object Frames:
+  /** nothing bound: the value is the program's */
+  final case class End[R <: Row, S, A]() extends Frames[R, A, S, S, A]:
+    def apply(a: A): Cont[R, S, S, A] = Cont.Return(a)
+  /** `f` bound to the value, the rest of the stack to its result */
+  final case class Then[R <: Row, A, X, I, T1, T, B](f: A => Cont[R, T1, T, X], next: Frames[R, X, I, T1, B]) extends Frames[R, A, I, T, B]:
+    def apply(a: A): Cont[R, I, T, B] = next match
+      case End() => f(a)
+      case _ => Cont.Bind(f(a), next)
+  /** `f` mapped over the value, the rest of the stack to its result. Applied, it builds the next step and stops —
+   * a chain of maps is not run through here, in the caller's stack */
+  final case class Mapped[R <: Row, A, X, I, T, B](f: A => X, next: Frames[R, X, I, T, B]) extends Frames[R, A, I, T, B]:
+    def apply(a: A): Cont[R, I, T, B] = next match
+      case End() => Cont.Return(f(a))
+      case _ => Cont.Bind(Cont.Return(f(a)), next)
 
 /** a program's head, what the loop over its binds comes to: its value, an operation with the rest, or a capture
  * with the rest. An operation's row has its effect's path in it, so a program over `Pure` has no operation. The
@@ -72,25 +101,54 @@ object Cont:
   def pure[R <: Row, S, A](a: A): Cont[R, S, S, A] = Return(a)
   def inject[R <: Row, S, E[_], X](op: E[X])(using in: In[E, R]): Cont[R, S, S, X] = Inject(op, in)
   def shift[R <: Row, I, O, A](f: (A => Cont[R, O, O, I]) => Cont[R, O, O, O]): Cont[R, I, O, A] = Shift(f)
+  /** `delay(c)`: the program `c`, built when the loop gets to it — a tail call in constant stack. Inline, so the
+   * thunk closes over `c`'s own variables, not over a by-name wrapper of them */
+  inline def delay[R <: Row, I, O, A](inline c: Cont[R, I, O, A]): Cont[R, I, O, A] = Delay(() => c)
   extension [R <: Row, S, O](body: Cont[R, S, O, S])
     /** `body.reset`: the body's value is its initial answer, the delimiter's value its final one */
     def reset[Q]: Cont[R, Q, Q, O] = Reset(body, identity)
 
   extension [R <: Row, I, O, A](c: Cont[R, I, O, A])
     /** to the head: binds reassociated and followed, a delimiter entered, in constant stack */
-    def step: Head[R, I, O, A] = loop(c)
+    def step: Head[R, I, O, A] = loop0(c)
 
-  @tailrec private def loop[R <: Row, I, O, A](c: Cont[R, I, O, A]): Head[R, I, O, A] = c match
+  /** the loop while nothing is bound under the program — the common case, a tail call's or a resumption's — so no
+   * stack is made until a `Bind` needs one: `loop` from there. A head here has the program's own rest */
+  @tailrec private def loop0[R <: Row, I, O, A](c: Cont[R, I, O, A]): Head[R, I, O, A] = c match
     case Return(a) => Head.Done(a)
     case Inject(op, in) => in.op(op, a => Return[R, I, A](a))
+    case Suspend(op, in, g) => in.op(op, g)
     case Shift(f) => Head.Cut(f, a => Return(a))
-    case Reset(body, ret) => loop(delimited(body, ret))
+    case Reset(body, ret) => loop0(delimited(body, ret))
+    case Delay(t) => loop0(t())
+    case Map(m, f) => m match
+      case Return(a) => Head.Done(f(a))
+      case _ => loop(m, Frames.Mapped(f, Frames.End()))
     case Bind(m, g) => m match
-      case Return(a) => loop(g(a))
+      case Return(a) => loop0(g(a))
       case Inject(op, in) => in.op(op, g)
-      case Shift(f) => Head.Cut(f, g)
-      case Reset(body, ret) => loop(Bind(delimited(body, ret), g))
-      case Bind(m2, f) => loop(Bind(m2, a => Bind(f(a), g)))
+      case Delay(t) => loop0(Bind(t(), g))
+      case _ => loop(m, Frames.Then(g, Frames.End()))
+
+  @tailrec private def loop[R <: Row, I, T, O, A, B](c: Cont[R, T, O, A], k: Frames[R, A, I, T, B]): Head[R, I, O, B] = c match
+    case Return(a) => k match
+      case Frames.End() => Head.Done(a)
+      case Frames.Then(f, next) => loop(f(a), next)
+      case Frames.Mapped(f, next) => next match
+        case Frames.End() => Head.Done(f(a))
+        case Frames.Then(g, rest) => loop(g(f(a)), rest)
+        case _ => loop(Return(f(a)), next)
+    case Inject(op, in) => in.op(op, k)
+    case Suspend(op, in, g) => k match
+      case Frames.End() => in.op(op, g)
+      case _ => in.op(op, Frames.Then(g, k))
+    case Shift(f) => Head.Cut(f, k)
+    case Reset(body, ret) => loop(delimited(body, ret), k)
+    case Delay(t) => loop(t(), k)
+    case Map(m, f) => loop(m, Frames.Mapped(f, k))
+    case Bind(m, g) => m match
+      case Return(a) => loop(g(a), k)
+      case _ => loop(m, Frames.Then(g, k))
 
   /** the delimiter's body to its head: a value is answered by `ret`; an operation goes out, with the rest of the
    * body under the delimiter again; a capture's body goes under the delimiter in place of the rest, with the
@@ -98,8 +156,13 @@ object Cont:
   private def delimited[R <: Row, Q, S, O, A](body: Cont[R, S, O, A], ret: A => S): Cont[R, Q, Q, O] =
     body.step match
       case Head.Done(a) => Return(ret(a))
-      case Head.Op(op, in, k) => in.resume(op, k)(Reset(_, ret))
+      case Head.Op(op, in, k) => in.bind(op, Redelimit(k, ret))
       case Head.Cut(f, k) => Reset(f(x => Reset(Return(x).flatMap(k), ret)), identity)
+
+  /** the rest of a delimiter's body, once the operation it waits on is answered outside: under the delimiter
+   * again. One object, where a closure over a closure was two */
+  private final class Redelimit[R <: Row, Q, S, O, A, X](k: X => Cont[R, S, O, A], ret: A => S) extends (X => Cont[R, Q, Q, O]):
+    def apply(x: X): Cont[R, Q, Q, O] = Reset(k(x), ret)
 
   extension [A](c: Cont[Pure, A, A, A])
     /** a program at the top, nothing to perform, its answer its value: the value — the top is a delimiter; a

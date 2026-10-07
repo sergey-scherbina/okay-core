@@ -35,6 +35,13 @@ class TestEffects extends munit.FunSuite:
       if i == 0 then Cont.pure(acc) else ask[Int].flatMap(x => asks(i - 1, acc + x))
     assertEquals(run(reader[(List[String], Int)](1)(collect[String, Int](asks(100000, 0)))), (Nil, 100000))
 
+  test("an operation through 16 handlers of other effects, and back, 10 000 times"):
+    def loop(i: Int, acc: Int)(using c: Effects, r: Has[ReaderOf[Int], c.R]): Cont[c.R, c.S, c.S, Int] =
+      if i == 0 then Cont.pure(acc) else ask[Int].flatMap(x => loop(i - 1, acc + x))
+    def nested(d: Int)(using c: Effects, r: Has[ReaderOf[Int], c.R]): Cont[c.R, c.S, c.S, Int] =
+      if d == 0 then loop(10000, 0) else reader[Int](0.5)(nested(d - 1))
+    assertEquals(run(reader[Int](2)(nested(16))), 20000)
+
   test("state: the cell is per run — the same program run twice starts from s0 twice"):
     val p: Cont[Pure, (Int, Int), (Int, Int), (Int, Int)] = state[Int](0)(using At[Pure, (Int, Int)]())(modify[Int](_ + 1))
     assertEquals(p.value, (1, 1))
@@ -130,6 +137,21 @@ class TestEffects extends munit.FunSuite:
       case Gen.Next(w, rest) => w :: take(i - 1, rest)
     assertEquals(take(3, generate[Int](using At[F, G]())(from(1))), List(10, 20, 30))
     assertEquals(produced, 2)
+
+  test("handlers are dynamic: a generator's rest asks the reader it is run under, not the one it was built under"):
+    type F = ReaderOf[Int] +: Pure
+    type G = Gen[Int, F]
+    // built under reader(7): its rest is still a program over Reader — its type says it needs one — and the
+    // consumer runs it under reader(8). A handler found where the program was BUILT (evidence passing) would say 7
+    val gen: Cont[Pure, G, G, G] =
+      reader[G](7)(using At[Pure, G]())(generate[Int](ask[Int].flatMap(yield_(_)).flatMap(_ => ask[Int].flatMap(yield_(_)))))
+    gen.value match
+      case Gen.Next(first, rest) =>
+        assertEquals(first, 7)
+        run(reader[G](8)(rest)) match
+          case Gen.Next(second, _) => assertEquals(second, 8)
+          case Gen.Done() => fail("a second element")
+      case Gen.Done() => fail("a first element")
 
   test("an effect its context does not have cannot be performed"):
     assert(compileErrors("""run(reader[Unit](1)(tell("x")))""").nonEmpty)

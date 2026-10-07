@@ -16,7 +16,7 @@ enum Skip[+A]:
  * MUTUAL TAIL RECURSION, `isEven`/`isOdd` over `n` (the basis: okay-cont's `tailcallChain`): a bind per call,
  * no node for a delay — `pure(()).flatMap(_ => …)` is the delay, read by the loop in constant stack.
  *
- *  - tailcallPure: no effect — the loop over binds alone
+ *  - tailcallPure: no effect — the loop over binds alone (BindBenchmark.tailcallDelay: the same through `delay`)
  *  - tailcallHandled: a `Tick` per call, answered IN PLACE by the nearest handler (`Answering`): the fold goes
  *    on with the rest, no resumption built
  *  - tailcallHandledGeneral: the same handler with its clause `k(a)` written out: an operation, its clause, the

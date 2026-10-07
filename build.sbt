@@ -21,6 +21,7 @@ lazy val root = (project in file("."))
   )
 
 // `sbt bench`, or `sbt "bench -f 1 -p n=100000 tailcall"`: JMH's options and a regexp go to `benchRun` (JMH,
-// then a summary table: project/Bench.scala). `Jmh/compile` first, a command of its own — on a clean build the
+// then a summary table: project/Bench.scala). `save` among them keeps the run in bench.d, `sbt "bench save"`;
+// `sbt "benchHistory <regexp>"` reads it. `Jmh/compile` first, a command of its own — on a clean build the
 // generator runs before the benchmarks are compiled and finds none
 addCommandAlias("bench", "Jmh/compile; benchRun")

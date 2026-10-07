@@ -90,6 +90,58 @@ class TestCont extends munit.FunSuite:
         case Ask.Number => k(1)
     assertEquals(loop(100000, 0).handle(one).value, 100000)
 
+  test("delay: the program is built when the loop gets to it, not before"):
+    var built = 0
+    val p: Cont[Pure, Int, Int, Int] = delay { built += 1; pure(1) }
+    assertEquals(built, 0)
+    assertEquals(p.value, 1)
+    assertEquals(p.value, 1)
+    assertEquals(built, 2)
+
+  test("100 000 tail calls through delay in constant stack"):
+    def isEven(i: Int): Cont[Pure, Boolean, Boolean, Boolean] = if i == 0 then pure(true) else delay(isOdd(i - 1))
+    def isOdd(i: Int): Cont[Pure, Boolean, Boolean, Boolean] = if i == 0 then pure(false) else delay(isEven(i - 1))
+    assertEquals(isEven(100000).value, true)
+    assertEquals(isEven(100001).value, false)
+
+  test("100 000 maps nested to the left, and to the right through delay, in constant stack"):
+    val left = (1 to 100000).foldLeft(pure[Pure, Int, Int](0))((acc, _) => acc.map(_ + 1))
+    assertEquals(left.value, 100000)
+    def go(i: Int): Cont[Pure, Int, Int, Int] = if i == 0 then pure(0) else delay(go(i - 1)).map(_ + 1)
+    assertEquals(go(100000).value, 100000)
+
+  test("maps and binds mixed keep their order"):
+    val p: Cont[Pure, String, String, String] =
+      pure[Pure, String, Int](1).map(_ + 1).flatMap(x => pure(x * 10)).map(_.toString).flatMap(s => pure(s + "!")).map(_ * 2)
+    assertEquals(p.value, "20!20!")
+
+  test("a shift under left-nested binds and maps: k is the whole context to the delimiter, applied twice"):
+    val inner: Cont[Pure, Int, Int, Int] = shift[Pure, Int, Int, Int](k => k(1).flatMap(a => k(10).map(b => a + b)))
+    val p: Cont[Pure, Int, Int, Int] = inner.map(_ + 1).flatMap(x => pure(x * 2)).map(_ + 100).reset
+    // k(x) = (x + 1) * 2 + 100: k(1) = 104, k(10) = 122
+    assertEquals(p.value, 226)
+
+  test("a map after an operation of a handler resuming twice: the map runs on each path"):
+    val twice: Handler[Ask, Pure, List[Int], Int, List[Int]] = new Handler[Ask, Pure, List[Int], Int, List[Int]]:
+      def ret(a: Int) = List(a)
+      def apply[X](op: Ask[X], k: X => Cont[Pure, List[Int], List[Int], List[Int]]) = op match
+        case Ask.Number => k(1).flatMap(xs => k(2).map(xs ++ _))
+    val prog: Cont[Ask +: Pure, List[Int], List[Int], Int] =
+      inject[Ask +: Pure, List[Int], Ask, Int](Ask.Number).map(_ * 10).flatMap(x => pure(x + 1)).map(_ * 2)
+    assertEquals(prog.handle(twice).value, List(22, 42))
+
+  test("an operation inside a reset, handled outside it by a handler resuming twice: the reset is put back each time"):
+    val twice: Handler[Ask, Pure, List[Int], List[Int], List[Int]] = new Handler[Ask, Pure, List[Int], List[Int], List[Int]]:
+      def ret(a: List[Int]) = a
+      def apply[X](op: Ask[X], k: X => Cont[Pure, List[Int], List[Int], List[Int]]) = op match
+        case Ask.Number => k(1).flatMap(xs => k(2).map(xs ++ _))
+    // inside the reset: the operation, then a shift capturing up to the reset, its k applied twice
+    val inner: Cont[Ask +: Pure, Int, Int, Int] =
+      inject[Ask +: Pure, Int, Ask, Int](Ask.Number).flatMap(n => shift[Ask +: Pure, Int, Int, Int](k => k(n).flatMap(a => k(n * 10).map(_ + a))).map(_ + 1))
+    val prog: Cont[Ask +: Pure, List[Int], List[Int], List[Int]] = inner.reset.map(List(_))
+    // n = 1: (1 + 1) + (10 + 1) = 13; n = 2: (2 + 1) + (20 + 1) = 24
+    assertEquals(prog.handle(twice).value, List(13, 24))
+
   test("value needs every operation handled: a program over a row is not a program at the top"):
     assert(compileErrors("""inject[Ask +: Pure, Int, Ask, Int](Ask.Number).value""").nonEmpty)
 
