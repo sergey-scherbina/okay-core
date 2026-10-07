@@ -14,6 +14,59 @@ sealed trait Effects:
 /** `E` is in the row of the context `R`: what an operation of `E` needs of it */
 type Has[E[_], R <: Row] = In[E, R]
 
+/** an effect of two parameters, its first given: `Reader % Int` is the effect `[X] =>> Reader[Int, X]` — the
+ * effect in a row, a path, a handler, by name */
+infix type %[F[_, +_], S] = [X] =>> F[S, X]
+
+/** the effect `E` AMONG THE EFFECTS a program needs, `Es`: one effect, or effects joined by `+:`, `Pure` at the end
+ * or not — `Reader % Int`, `Reader % Int +: Writer % String`. A path in `Es`, as `In` is in a row */
+enum Req[E[_], Es <: AnyKind]:
+  case Only[E[_]]() extends Req[E, E]
+  case First[E[_], T <: AnyKind]() extends Req[E, E +: T]
+  case Next[E[_], E2[_], T <: AnyKind](in: Req[E, T]) extends Req[E, E2 +: T]
+object Req extends ReqLow:
+  given only[E[_]]: Req[E, E] = Only()
+  given first[E[_], T <: AnyKind]: Req[E, E +: T] = First()
+sealed trait ReqLow:
+  given next[E[_], E2[_], T <: AnyKind](using in: Req[E, T]): Req[E, E2 +: T] = Req.Next(in)
+
+/** a path in the row `R` for each effect a program needs, `Es`, by its path in `Es` */
+sealed trait Paths[Es <: AnyKind, R <: Row]:
+  def apply[E[_]](in: Req[E, Es]): In[E, R]
+object Paths:
+  given one[E0[_], R <: Row](using head: In[E0, R]): Paths[E0, R] = new Paths[E0, R]:
+    // a path into one effect is `Only`: the others are into `+:`, of another kind
+    def apply[E[_]](in: Req[E, E0]): In[E, R] = (in: @unchecked) match
+      case Req.Only() => head
+  given none[R <: Row]: Paths[Pure, R] = new Paths[Pure, R]:
+    def apply[E[_]](in: Req[E, Pure]): In[E, R] = vacuous[E, Pure, In[E, R]](in)
+  given cons[E0[_], T <: AnyKind, R <: Row](using head: In[E0, R], tail: Paths[T, R]): Paths[E0 +: T, R] = new Paths[E0 +: T, R]:
+    def apply[E[_]](in: Req[E, E0 +: T]): In[E, R] = in match
+      case Req.First() => head
+      case Req.Next(out) => tail(out)
+  /** `A` when nothing is needed, else nothing: a path is to an effect needed, so for `Pure` the value it would be
+   * is `A`, and there is no such path */
+  private type IfPure[X, A] = X match
+    case Pure => A
+    case _ => Unit
+  // never applied — there is no path into `Pure`; a path into a row is into `+:`, `First` or `Next` alike
+  private def vacuous[E[_], X <: Row, A](in: Req[E, X]): IfPure[X, A] = (in: @unchecked) match
+    case Req.First() => ()
+
+/** the context with every effect a program needs, `Es`, in its own row */
+sealed trait Needs[Es <: AnyKind] extends Effects:
+  val paths: Paths[Es, R]
+object Needs:
+  given all[Es <: AnyKind](using c: Effects, p: Paths[Es, c.R]): (Needs[Es] { type R = c.R; type S = c.S }) =
+    new Needs[Es] { type R = c.R; type S = c.S; val paths = p }
+  given found[E[_], Es <: AnyKind](using n: Needs[Es], in: Req[E, Es]): In[E, n.R] = n.paths(in)
+
+/** `A ! Es`: a program of value `A`, in any context whose row has every effect of `Es` — one, `Int ! Reader % Int`,
+ * or several, `Int ! Reader % Int +: Writer % String`, `Pure` at the end or not; their order the program's own,
+ * the context's row any. At the context's answer, not `Free`'s `Unit`: under a handler the answer is the handler's
+ * — `Either[E, A]` under `throws` — so a `Free` program would run only where nothing is answered */
+infix type ![A, Es <: AnyKind] = (c: Needs[Es]) ?=> Cont[c.R, c.S, c.S, A]
+
 object Effects:
   /** the context at the row `R0`, the answer `S0` */
   final class At[R0 <: Row, S0] extends Effects:

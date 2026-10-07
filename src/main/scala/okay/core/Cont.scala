@@ -7,27 +7,28 @@ import scala.annotation.tailrec
  * can, so every walk here is total, no claim, no cast, no runtime test of an operation's class */
 sealed trait Row
 /** the effect `E` in front of the row `T` */
-final class +:[E[_], T <: Row] extends Row
+sealed trait +:[E[_], T <: AnyKind] extends Row
 /** the empty row: a program over it performs nothing */
 sealed trait Pure extends Row
 /** the row grown by an effect, read left to right as the handlers are nested, outside in: `Pure + Ask + Say` is
  * `Say +: Ask +: Pure`, `Say` handled nearest */
-type +[R <: Row, E[_]] = E +: R
+type +[R <: AnyKind, E[_]] = E +: R
 
 /** the effect `E` IN the row `R`: a path to it, the compiler builds it — the first, by priority. An operation
  * carries its path; a handler follows it: at `Here`, the operation is the handler's; at `There`, it goes on
  * outside, one effect off the row */
-sealed trait In[E[_], R <: Row]:
+enum In[E[_], R <: Row]:
+  case Here[E[_], T <: Row]() extends In[E, E +: T]
+  case There[E[_], E2[_], T <: Row](in: In[E, T]) extends In[E, E2 +: T]
+
   /** the head for an operation at this path: the row has the effect, the path says so */
-  def op[I, O, X, A](op: E[X], k: X => Cont[R, I, O, A]): Head[R, I, O, A]
+  def op[I, O, X, A](op: E[X], k: X => Cont[R, I, O, A]): Head[R, I, O, A] = this match
+    case h: Here[e, t] => Head.Op[E, E, t, I, O, X, A](op, h, k)
+    case h: There[e, e2, t] => Head.Op[E, e2, t, I, O, X, A](op, h, k)
   /** the operation out at this path, bound to `k`: an operation crossing a delimiter goes on outside so, `k` the
    * rest put back under the delimiter it crossed */
   def bind[Q, X, Z](op: E[X], k: X => Cont[R, Q, Q, Z]): Cont[R, Q, Q, Z] = Cont.Suspend(op, this, k)
 object In extends InLow:
-  final case class Here[E[_], T <: Row]() extends In[E, E +: T]:
-    def op[I, O, X, A](op: E[X], k: X => Cont[E +: T, I, O, A]): Head[E +: T, I, O, A] = Head.Op(op, this, k)
-  final case class There[E[_], E2[_], T <: Row](in: In[E, T]) extends In[E, E2 +: T]:
-    def op[I, O, X, A](op: E[X], k: X => Cont[E2 +: T, I, O, A]): Head[E2 +: T, I, O, A] = Head.Op(op, this, k)
   given here[E[_], T <: Row]: In[E, E +: T] = Here()
 sealed trait InLow:
   given there[E[_], E2[_], T <: Row](using in: In[E, T]): In[E, E2 +: T] = In.There(in)
@@ -70,6 +71,10 @@ enum Cont[R <: Row, I, O, A]:
     case Inject(op, in) => Suspend(op, in, f)
     case _ => Bind(this, f)
   def map[B](f: A => B): Cont[R, I, O, B] = Map(this, f)
+
+/** a program over the row `R` whose answer is nothing, `Unit`, before and after: the free monad of the row's
+ * effects — no capture moves its answer, its value only a handler's */
+type Free[R <: Row, A] = Cont[R, Unit, Unit, A]
 
 /** WHAT IS BOUND TO A VALUE, the loop's stack: the functions a value goes through, innermost first — each
  * `Bind` the loop enters pushes its function, no tree rebuilt. As a function it is the rest itself, `k`: a head's

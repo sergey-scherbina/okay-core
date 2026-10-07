@@ -4,6 +4,7 @@ import org.openjdk.jmh.annotations.{State as JmhState, *}
 import java.util.concurrent.TimeUnit
 import Cont.*
 import Effects.*
+import okay.std.*
 
 /** an operation with its own answer, forwarded or answered by its handler */
 enum Tick[+A]:

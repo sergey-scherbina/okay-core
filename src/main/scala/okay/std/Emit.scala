@@ -1,13 +1,14 @@
-package okay.core
+package okay.std
+
+import okay.core.*
 
 /** EMIT: a body that yields. Two handlers: `collect` keeps every element in a buffer of its own, the body resumed
  * at once; `generate` is LAZY — each `yield` captures the rest of the body as the next step, a program over what
  * the handler leaves, run when the consumer asks */
 enum Emit[W, +A]:
   case Yield[W](w: W) extends Emit[W, Unit]
-type EmitOf[W] = [X] =>> Emit[W, X]
 
-def yield_[W](w: W)(using c: Effects, has: Has[EmitOf[W], c.R]): Cont[c.R, c.S, c.S, Unit] = perform[EmitOf[W], Unit](Emit.Yield(w))
+def yield_[W](w: W)(using c: Effects, has: Has[Emit % W, c.R]): Cont[c.R, c.S, c.S, Unit] = perform[Emit % W, Unit](Emit.Yield(w))
 /** `collect[W, A](body)`: every element yielded, in order, and the value. The elements go to a buffer, one per
  * RUN — made when the program is stepped, as `state`'s cell — and each `yield` resumes the body at once: nothing
  * waits for the body to end (a clause `k(()).map(w :: _)` left one frame an element, unwound at the end). A
@@ -15,9 +16,9 @@ def yield_[W](w: W)(using c: Effects, has: Has[EmitOf[W], c.R]): Cont[c.R, c.S, 
 def collect[W, A]: CollectAt[W, A] = CollectAt[W, A]()
 final class CollectAt[W, A]:
   type Ans = (List[W], A)
-  def apply(using c: Effects)(body: Effects.At[EmitOf[W] +: c.R, Ans] ?=> Cont[EmitOf[W] +: c.R, Ans, Ans, A]): Cont[c.R, c.S, c.S, Ans] =
+  def apply(using c: Effects)(body: Effects.At[Emit % W +: c.R, Ans] ?=> Cont[Emit % W +: c.R, Ans, Ans, A]): Cont[c.R, c.S, c.S, Ans] =
     Cont.pure[c.R, c.S, Unit](()).flatMap: _ =>
-      Effects.handle(new Answering[EmitOf[W], c.R, c.S, A, Ans]:
+      Effects.handle(new Answering[Emit % W, c.R, c.S, A, Ans]:
         private val out = List.newBuilder[W]
         def ret(a: A): Ans = (out.result(), a)
         def value[X](op: Emit[W, X]): X = op match
@@ -33,10 +34,10 @@ enum Gen[W, R <: Row]:
  * next element */
 def generate[W]: GenerateAt[W] = GenerateAt[W]()
 final class GenerateAt[W]:
-  def apply(using c: Effects)(body: Effects.At[EmitOf[W] +: c.R, Gen[W, c.R]] ?=> Cont[EmitOf[W] +: c.R, Gen[W, c.R], Gen[W, c.R], Unit])
+  def apply(using c: Effects)(body: Effects.At[Emit % W +: c.R, Gen[W, c.R]] ?=> Cont[Emit % W +: c.R, Gen[W, c.R], Gen[W, c.R], Unit])
            (using c.S =:= Gen[W, c.R]): Cont[c.R, c.S, c.S, Gen[W, c.R]] =
     type G = Gen[W, c.R]
-    val h = new Handler[EmitOf[W], c.R, G, Unit, G]:
+    val h = new Handler[Emit % W, c.R, G, Unit, G]:
       def ret(a: Unit): G = Gen.Done()
       def apply[X](op: Emit[W, X], k: X => Cont[c.R, G, G, G]): Cont[c.R, G, G, G] = op match
         case Emit.Yield(w) => Cont.Return(Gen.Next(w, k(())))

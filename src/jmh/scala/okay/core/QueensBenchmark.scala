@@ -4,6 +4,7 @@ import org.openjdk.jmh.annotations.{State as JmhState, *}
 import java.util.concurrent.TimeUnit
 import Cont.*
 import Effects.*
+import okay.std.*
 
 /** N QUEENS by `choose`: a queen per row, its column chosen among the safe ones, every solution — multi-shot,
  * a resumption per safe square, the solutions joined on the way back */

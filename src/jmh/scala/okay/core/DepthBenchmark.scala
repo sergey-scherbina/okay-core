@@ -4,6 +4,7 @@ import org.openjdk.jmh.annotations.{State as JmhState, *}
 import java.util.concurrent.TimeUnit
 import Cont.*
 import Effects.*
+import okay.std.*
 
 /** an operation of the outermost handler, crossing every handler between */
 enum Far[+A]:

@@ -1,4 +1,6 @@
-package okay.core
+package okay.std
+
+import okay.core.*
 
 /** CHOICE, multi-shot: `among(as)` is answered once per element, the continuation resumed for each, and the
  * delimiter answers every value the body came to, in order */
