@@ -6,9 +6,10 @@ enum Throws[E, +A]:
   case Raise[E](e: E) extends Throws[E, Nothing]
 type ThrowsOf[E] = [X] =>> Throws[E, X]
 
-/** the failure: a program of any value, which no continuation ever gets */
+/** the failure: a program of any value, which no continuation ever gets — `Raise` is a `Throws[E, A]` for any
+ * `A`, `Throws` covariant, so no map from `Nothing` */
 def raise[E, A](e: E)(using c: Effects, has: Has[ThrowsOf[E], c.R]): Cont[c.R, c.S, c.S, A] =
-  perform[ThrowsOf[E], Nothing](Throws.Raise(e)).map(n => n)
+  perform[ThrowsOf[E], A](Throws.Raise(e))
 /** `throws[E, A](body)`: the value as `Right`, or the first `raise` as `Left` */
 def throws[E, A]: ThrowsAt[E, A] = ThrowsAt[E, A]()
 final class ThrowsAt[E, A]:

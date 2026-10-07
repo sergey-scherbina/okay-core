@@ -90,6 +90,19 @@ class TestCont extends munit.FunSuite:
         case Ask.Number => k(1)
     assertEquals(loop(100000, 0).handle(one).value, 100000)
 
+  test("100 000 shifts in a row, each body k(1), in constant stack: the delimiters do not nest"):
+    def shifts(i: Int, acc: Int): Cont[Pure, Int, Int, Int] =
+      if i == 0 then pure(acc)
+      else shift[Pure, Int, Int, Int](k => k(1)).flatMap(x => pure(x + 1)).flatMap(x => shifts(i - 1, acc + x))
+    assertEquals(shifts(100000, 0).value, 200000)
+    assertEquals(shifts(100000, 0).reset[Int].value, 200000)
+
+  test("100 000 shifts under a handler, each under binds, in constant stack"):
+    def shifts(i: Int, acc: Int): Cont[Eff, Int, Int, Int] =
+      if i == 0 then pure(acc)
+      else shift[Eff, Int, Int, Int](k => k(1)).flatMap(x => pure(x + 1)).flatMap(x => shifts(i - 1, acc + x))
+    assertEquals(shifts(100000, 0).handle(asking(0)).handle(saying).value, (Nil, 200000))
+
   test("delay: the program is built when the loop gets to it, not before"):
     var built = 0
     val p: Cont[Pure, Int, Int, Int] = delay { built += 1; pure(1) }

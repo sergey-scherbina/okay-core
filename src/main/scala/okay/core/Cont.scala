@@ -99,7 +99,7 @@ enum Frames[R <: Row, A, I, T, B] extends (A => Cont[R, I, T, B]):
 enum Head[R <: Row, I, O, A]:
   case Done[R <: Row, S, A](a: A) extends Head[R, S, S, A]
   case Op[E[_], E2[_], T <: Row, I, O, X, A](op: E[X], in: In[E, E2 +: T], k: X => Cont[E2 +: T, I, O, A]) extends Head[E2 +: T, I, O, A]
-  case Cut[R <: Row, I, T, O, X, A](f: (X => Cont[R, O, O, T]) => Cont[R, O, O, O], k: X => Cont[R, I, T, A]) extends Head[R, I, O, A]
+  case Cut[R <: Row, I, T, O, X, A](f: (X => Cont[R, O, O, T]) => Cont[R, O, O, O], k: Frames[R, X, I, T, A]) extends Head[R, I, O, A]
 
 object Cont:
   def pure[R <: Row, S, A](a: A): Cont[R, S, S, A] = Return(a)
@@ -122,7 +122,7 @@ object Cont:
     case Return(a) => Head.Done(a)
     case Inject(op, in) => in.op(op, a => Return[R, I, A](a))
     case Suspend(op, in, g) => in.op(op, g)
-    case Shift(f) => Head.Cut(f, a => Return(a))
+    case Shift(f) => Head.Cut(f, Frames.End())
     case Reset(body, ret) => loop0(delimited(body, ret))
     case Delay(t) => loop0(t())
     case Push(m, ks) => loop(m, ks)
@@ -161,11 +161,15 @@ object Cont:
   /** the delimiter's body to its head: a value is answered by `ret`; an operation goes out, with the rest of the
    * body under the delimiter again; a capture's body goes under the delimiter in place of the rest, with the
    * rest under a delimiter of its own, `ret` included, as `k` */
-  private def delimited[R <: Row, Q, S, O, A](body: Cont[R, S, O, A], ret: A => S): Cont[R, Q, Q, O] =
+  private[core] def delimited[R <: Row, Q, S, O, A](body: Cont[R, S, O, A], ret: A => S): Cont[R, Q, Q, O] =
     body.step match
       case Head.Done(a) => Return(ret(a))
       case Head.Op(op, in, k) => in.bind(op, Redelimit(k, ret))
-      case Head.Cut(f, k) => Reset(f(x => Reset(Return(x).flatMap(k), ret)), identity)
+      case Head.Cut(f, k) => f(x => Reset(Push(Return(x), k), ret)) match
+        // a body under a delimiter already — `k(x)` in tail position, most often — is not put under a second: the
+        // two would nest, each the next capture's `step` inside the last's, a stack frame a capture
+        case Reset(b, r) => Reset(b, r)
+        case b => Reset(b, identity)
 
   /** the rest of a delimiter's body, once the operation it waits on is answered outside: under the delimiter
    * again. One object, where a closure over a closure was two */
@@ -177,4 +181,4 @@ object Cont:
      * program that moves the answer goes under a `reset` first */
     def value: A = c.step match
       case Head.Done(a) => a
-      case Head.Cut(f, k) => f(x => k(x).reset).value
+      case Head.Cut(f, k) => f(x => Push(Return(x), k).reset).value
