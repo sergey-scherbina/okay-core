@@ -116,24 +116,19 @@ object Cont:
     /** to the head: binds reassociated and followed, a delimiter entered, in constant stack */
     def step: Head[R, I, O, A] = loop0(c)
 
-  /** the loop while nothing is bound under the program — the common case, a tail call's or a resumption's — so no
-   * stack is made until a `Bind` needs one: `loop` from there. A head here has the program's own rest */
+  /** the loop while nothing is bound under the program — the common case, a tail call's or a resumption's — the
+   * common heads taken here with no stack made; `loop` from the first bind, map or delimiter on, with its stack.
+   * A head here has the program's own rest */
   @tailrec private def loop0[R <: Row, I, O, A](c: Cont[R, I, O, A]): Head[R, I, O, A] = c match
     case Return(a) => Head.Done(a)
-    case Inject(op, in) => in.op(op, a => Return[R, I, A](a))
     case Suspend(op, in, g) => in.op(op, g)
-    case Shift(f) => Head.Cut(f, Frames.End())
-    case Reset(body, ret) => loop0(delimited(body, ret))
     case Delay(t) => loop0(t())
     case Push(m, ks) => loop(m, ks)
-    case Map(m, f) => m match
-      case Return(a) => Head.Done(f(a))
-      case _ => loop(m, Frames.Mapped(f, Frames.End()))
     case Bind(m, g) => m match
       case Return(a) => loop0(g(a))
-      case Inject(op, in) => in.op(op, g)
       case Delay(t) => loop0(Bind(t(), g))
       case _ => loop(m, Frames.Then(g, Frames.End()))
+    case _ => loop(c, Frames.End())
 
   @tailrec private def loop[R <: Row, I, T, O, A, B](c: Cont[R, T, O, A], k: Frames[R, A, I, T, B]): Head[R, I, O, B] = c match
     case Return(a) => k match
@@ -142,7 +137,7 @@ object Cont:
       case Frames.Mapped(f, next) => next match
         case Frames.End() => Head.Done(f(a))
         case Frames.Then(g, rest) => loop(g(f(a)), rest)
-        case _ => loop(Return(f(a)), next)
+        case Frames.Mapped(g, rest) => loop(Return(g(f(a))), rest)
     case Inject(op, in) => in.op(op, k)
     case Suspend(op, in, g) => k match
       case Frames.End() => in.op(op, g)
@@ -165,11 +160,15 @@ object Cont:
     body.step match
       case Head.Done(a) => Return(ret(a))
       case Head.Op(op, in, k) => in.bind(op, Redelimit(k, ret))
-      case Head.Cut(f, k) => f(x => Reset(Push(Return(x), k), ret)) match
+      case Head.Cut(f, k) => f(under(k, ret)) match
         // a body under a delimiter already — `k(x)` in tail position, most often — is not put under a second: the
         // two would nest, each the next capture's `step` inside the last's, a stack frame a capture
         case Reset(b, r) => Reset(b, r)
         case b => Reset(b, identity)
+
+  /** a captured rest as `k`: applied, the stack it holds resumed, under a delimiter of its own with `ret` */
+  private[core] def under[R <: Row, Q, S, T, X, A](k: Frames[R, X, S, T, A], ret: A => S): X => Cont[R, Q, Q, T] =
+    x => Reset(Push(Return(x), k), ret)
 
   /** the rest of a delimiter's body, once the operation it waits on is answered outside: under the delimiter
    * again. One object, where a closure over a closure was two */
@@ -181,4 +180,4 @@ object Cont:
      * program that moves the answer goes under a `reset` first */
     def value: A = c.step match
       case Head.Done(a) => a
-      case Head.Cut(f, k) => f(x => Push(Return(x), k).reset).value
+      case Head.Cut(f, k) => f(under(k, identity)).value

@@ -104,7 +104,7 @@ private def fold[E[_], T <: Row, Q, S, Ans, A, T1, X](c: Cont[E +: T, T1, Ans, X
       case Frames.Mapped(f, next) => next match
         case Frames.End() => Return(ret(f(a)))
         case Frames.Then(g, rest) => fold(g(f(a)), rest, ret, h)
-        case _ => fold(Return(f(a)), next, ret, h)
+        case Frames.Mapped(g, rest) => fold(Return(g(f(a))), rest, ret, h)
     case i: Inject[e1, r, s, x] => i.in match
       case In.Here() => h match
         case an: Answering[E, T, Q, ?, Ans] => fold(Return(an.value(i.op)), k, ret, h)
@@ -118,7 +118,7 @@ private def fold[E[_], T <: Row, Q, S, Ans, A, T1, X](c: Cont[E +: T, T1, Ans, X
     case Push(m, ks) => k match
       case Frames.End() => fold(m, ks, ret, h)
       case _ => fold(m, Frames.Then(ks, k), ret, h)
-    case Shift(f) => fold(f(x => Reset(Push(Return(x), k), ret)), Frames.End(), identity, h)
+    case Shift(f) => fold(f(under(k, ret)), Frames.End(), identity, h)
     case Reset(b, r) => fold(delimited(b, r), k, ret, h)
 
 /** this handler's operation given to its clause, with the rest as `k`, resumed lazily */
