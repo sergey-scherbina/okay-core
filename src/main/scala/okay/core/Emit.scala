@@ -1,22 +1,27 @@
 package okay.core
 
-/** EMIT: a body that yields. Two handlers: `collect` keeps every element; `generate` is LAZY — each `yield`
- * captures the rest of the body as the next step, a program over what the handler leaves, run when the consumer
- * asks */
+/** EMIT: a body that yields. Two handlers: `collect` keeps every element in a buffer of its own, the body resumed
+ * at once; `generate` is LAZY — each `yield` captures the rest of the body as the next step, a program over what
+ * the handler leaves, run when the consumer asks */
 enum Emit[W, +A]:
   case Yield[W](w: W) extends Emit[W, Unit]
 type EmitOf[W] = [X] =>> Emit[W, X]
 
 def yield_[W](w: W)(using c: Effects, has: Has[EmitOf[W], c.R]): Cont[c.R, c.S, c.S, Unit] = perform[EmitOf[W], Unit](Emit.Yield(w))
-/** `collect[W, A](body)`: every element yielded, and the value */
+/** `collect[W, A](body)`: every element yielded, in order, and the value. The elements go to a buffer, one per
+ * RUN — made when the program is stepped, as `state`'s cell — and each `yield` resumes the body at once: nothing
+ * waits for the body to end (a clause `k(()).map(w :: _)` left one frame an element, unwound at the end). A
+ * resumption shares the buffer: a body resumed twice collects both paths' elements, in the order they ran */
 def collect[W, A]: CollectAt[W, A] = CollectAt[W, A]()
 final class CollectAt[W, A]:
   type Ans = (List[W], A)
   def apply(using c: Effects)(body: Effects.At[EmitOf[W] +: c.R, Ans] ?=> Cont[EmitOf[W] +: c.R, Ans, Ans, A]): Cont[c.R, c.S, c.S, Ans] =
-    Effects.handle(new Handler[EmitOf[W], c.R, c.S, A, Ans]:
-      def ret(a: A): Ans = (Nil, a)
-      def apply[X](op: Emit[W, X], k: X => Cont[c.R, c.S, c.S, Ans]): Cont[c.R, c.S, c.S, Ans] = op match
-        case Emit.Yield(w) => k(()).map((ws, a) => (w :: ws, a)))(body)
+    Cont.pure[c.R, c.S, Unit](()).flatMap: _ =>
+      Effects.handle(new Handler[EmitOf[W], c.R, c.S, A, Ans]:
+        private val out = List.newBuilder[W]
+        def ret(a: A): Ans = (out.result(), a)
+        def apply[X](op: Emit[W, X], k: X => Cont[c.R, c.S, c.S, Ans]): Cont[c.R, c.S, c.S, Ans] = op match
+          case Emit.Yield(w) => out += w; k(()))(body)
 
 /** a lazy generator over the row `R`: the next element and the rest, a program over `R` at the generator's own
  * answer; or done */

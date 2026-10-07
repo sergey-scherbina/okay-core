@@ -66,6 +66,15 @@ class TestEffects extends munit.FunSuite:
   test("collect: every element yielded, and the value"):
     assertEquals(run(collect[Int, String](yield_(1).flatMap(_ => yield_(2)).map(_ => "done"))), (List(1, 2), "done"))
 
+  test("collect: the buffer is per run — the same program run twice collects from empty twice"):
+    val p: Cont[Pure, (List[Int], Unit), (List[Int], Unit), (List[Int], Unit)] =
+      collect[Int, Unit](using At[Pure, (List[Int], Unit)]())(yield_(1).flatMap(_ => yield_(2)))
+    assertEquals(p.value, (List(1, 2), ()))
+    assertEquals(p.value, (List(1, 2), ()))
+
+  test("collect and choose: a resumption shares the buffer — both paths' elements, in the order they ran"):
+    assertEquals(run(collect[Int, Seq[Int]](choose[Int](among(Seq(1, 2)).flatMap(x => yield_(x).map(_ => x * 10))))), (List(1, 2), Seq(10, 20)))
+
   test("generate is lazy: an infinite body, three elements pulled, nothing past them runs"):
     type G = Gen[Int, Pure]
     var produced = 0
@@ -87,6 +96,20 @@ class TestEffects extends munit.FunSuite:
     val gen: Cont[F, G, G, G] =
       generate[Int](using At[F, G]())(ask[Int].flatMap(n => yield_(n)).flatMap(_ => ask[Int].flatMap(n => yield_(n * 2))))
     assertEquals(all(gen), List(7, 14))
+
+  test("Fibonacci: collected and generated agree, the generator infinite, and 10 000 of them in constant stack"):
+    def fibs(i: Int, a: Long, b: Long)(using c: Effects, e: Has[EmitOf[Long], c.R]): Cont[c.R, c.S, c.S, Unit] =
+      if i == 0 then Cont.pure(()) else yield_(a).flatMap(_ => fibs(i - 1, b, a + b))
+    def forever(a: Long, b: Long)(using c: Effects, e: Has[EmitOf[Long], c.R]): Cont[c.R, c.S, c.S, Unit] =
+      yield_(a).flatMap(_ => forever(b, a + b))
+    type G = Gen[Long, Pure]
+    def take(n: Int, g: Cont[Pure, G, G, G]): List[Long] = if n == 0 then Nil else g.value match
+      case Gen.Done() => Nil
+      case Gen.Next(w, rest) => w :: take(n - 1, rest)
+    val first = List(0L, 1, 1, 2, 3, 5, 8, 13, 21, 34)
+    assertEquals(run(collect[Long, Unit](fibs(10, 0, 1)))._1, first)
+    assertEquals(take(10, generate[Long](using At[Pure, G]())(forever(0, 1))), first)
+    assertEquals(run(collect[Long, Unit](fibs(10000, 0, 1)))._1.length, 10000)
 
   test("an effect its context does not have cannot be performed"):
     assert(compileErrors("""run(reader[Unit](1)(tell("x")))""").nonEmpty)
